@@ -1,0 +1,8 @@
+## Telegram Bot Terminator
+
+`.env`
+```
+TELEGRAM_TOKEN=
+TELEGRAM_WEBHOOK_URL=
+TELEGRAM_BOT_LISTEN_PORT=
+```
