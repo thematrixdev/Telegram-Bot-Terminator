@@ -4,7 +4,6 @@ import os
 import random
 
 import pymongo
-from sqlalchemy import create_engine
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
@@ -22,14 +21,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-engine = create_engine(
-    'mysql+pymysql://telegram-bot-terminator:1qaz2wsx@telegram-bot-terminator-database:3306/telegram-bot-terminator',
-    echo=False,
-)
-
 mongodb_client = pymongo.MongoClient(
-    host=os.environ['MONGODB_HOST'],
-    port=int(os.environ['MONGODB_PORT']),
+    host="mongodb",
+    port=27017,
     username=os.environ['MONGODB_USER'],
     password=os.environ['MONGODB_PASS'],
 )

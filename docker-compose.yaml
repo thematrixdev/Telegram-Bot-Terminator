@@ -10,8 +10,6 @@ services:
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
       TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL}
       TELEGRAM_BOT_LISTEN_PORT: ${TELEGRAM_BOT_LISTEN_PORT}
-      MONGODB_HOST: ${MONGODB_HOST}
-      MONGODB_PORT: ${MONGODB_PORT}
       MONGODB_USER: ${MONGODB_USER}
       MONGODB_PASS: ${MONGODB_PASS}
     ports:
@@ -27,8 +25,8 @@ services:
     image: mongo
     container_name: telegram-bot-terminator-mongodb
     environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: 1qaz2wsx3edc
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASS}
     volumes:
       - type: volume
         source: mongodb
