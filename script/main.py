@@ -4,7 +4,7 @@ import os
 import random
 
 import pymongo
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions, constants
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
 TELEGRAM_TOKEN = os.environ['TELEGRAM_TOKEN']
@@ -127,123 +127,144 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not update.message:
         return
 
-    if update.message.new_chat_members:
-        for new_member in update.message.new_chat_members:
-            if (new_member.id != update.message.from_user.id) or new_member.is_premium:
-                mongodb_collection.insert_one({
+    if update.message.chat.type == constants.ChatType.PRIVATE:
+        await update.message.from_user.send_message("Add me to a GROUP and grant me ADMIN permission please")
+    elif update.message.chat.type == constants.ChatType.GROUP or update.message.chat.type == constants.ChatType.SUPERGROUP:
+        if update.message.new_chat_members:
+            for new_member in update.message.new_chat_members:
+                if new_member.id == context.bot.id:
+                    await update.message.chat.send_message("Grant me ADMIN permission please")
+
+                    mongodb_database["group"].insert_one({
+                        "chat_id": update.message.chat.id,
+                        "chat_name": update.message.chat.title,
+                        "joined_time": update.message.date,
+                    })
+                elif (new_member.id != update.message.from_user.id) or new_member.is_premium:
+                    mongodb_collection.insert_one({
+                        "chat_id": update.message.chat.id,
+                        "chat_name": update.message.chat.title,
+                        "user_id": new_member.id,
+                        "user_name": new_member.name,
+                        "premium": new_member.is_premium,
+                        "cause_id": update.message.from_user.id,
+                        "cause_name": update.message.from_user.name,
+                        "welcome_message_id": update.message.id,
+                        "joined_time": update.message.date,
+                        "bot_check_passed": True,
+                        "spam_check_passed": True,
+                    })
+                else:
+                    await context.bot.restrict_chat_member(
+                        chat_id=update.message.chat.id,
+                        user_id=new_member.id,
+                        permissions=ChatPermissions(
+                            can_send_messages=False,
+                            can_send_media_messages=False,
+                            can_send_polls=False,
+                            can_send_other_messages=False,
+                            can_add_web_page_previews=False,
+                            can_change_info=False,
+                            can_invite_users=False,
+                            can_pin_messages=False,
+                        ),
+                    )
+
+                    random.shuffle(captcha_symbols)
+                    i = random.randint(1, len(captcha_symbols)) - 1
+                    keyboard_row = []
+                    for k in range(len(captcha_symbols)):
+                        d = '0'
+                        if k == i:
+                            d = '1'
+                        keyboard_row.append(InlineKeyboardButton(captcha_symbols[k], callback_data=d))
+                    reply_markup = InlineKeyboardMarkup([keyboard_row])
+                    result = await update.message.reply_text(
+                        "Hello " + new_member.name + "\nPlease select " + captcha_symbols[i] + " in 60 seconds",
+                        reply_markup=reply_markup)
+
+                    context.job_queue.run_once(
+                        captcha_timeout,
+                        60,
+                        data=result.id,
+                        name=str(update.message.chat.id) + '_' + str(new_member.id),
+                        chat_id=update.message.chat.id,
+                        user_id=new_member.id,
+                    )
+
+                    mongodb_collection.insert_one({
+                        "chat_id": update.message.chat.id,
+                        "chat_name": update.message.chat.title,
+                        "user_id": new_member.id,
+                        "user_name": new_member.name,
+                        "premium": new_member.is_premium,
+                        "welcome_message_id": update.message.id,
+                        "joined_time": update.message.date,
+                    })
+        elif update.message.left_chat_member:
+            if update.message.left_chat_member.id == context.bot.id:
+                mongodb_database["group"].update_one({
                     "chat_id": update.message.chat.id,
-                    "chat_name": update.message.chat.title,
-                    "user_id": new_member.id,
-                    "user_name": new_member.name,
-                    "premium": new_member.is_premium,
-                    "cause_id": update.message.from_user.id,
-                    "cause_name": update.message.from_user.name,
-                    "welcome_message_id": update.message.id,
-                    "joined_time": update.message.date,
-                    "bot_check_passed": True,
-                    "spam_check_passed": True,
-                })
-            else:
-                await context.bot.restrict_chat_member(
-                    chat_id=update.message.chat.id,
-                    user_id=new_member.id,
-                    permissions=ChatPermissions(
-                        can_send_messages=False,
-                        can_send_media_messages=False,
-                        can_send_polls=False,
-                        can_send_other_messages=False,
-                        can_add_web_page_previews=False,
-                        can_change_info=False,
-                        can_invite_users=False,
-                        can_pin_messages=False,
-                    ),
-                )
-
-                random.shuffle(captcha_symbols)
-                i = random.randint(1, len(captcha_symbols)) - 1
-                keyboard_row = []
-                for k in range(len(captcha_symbols)):
-                    d = '0'
-                    if k == i:
-                        d = '1'
-                    keyboard_row.append(InlineKeyboardButton(captcha_symbols[k], callback_data=d))
-                reply_markup = InlineKeyboardMarkup([keyboard_row])
-                result = await update.message.reply_text(
-                    "Hello " + new_member.name + "\nPlease select " + captcha_symbols[i] + " in 60 seconds",
-                    reply_markup=reply_markup)
-
-                context.job_queue.run_once(
-                    captcha_timeout,
-                    60,
-                    data=result.id,
-                    name=str(update.message.chat.id) + '_' + str(new_member.id),
-                    chat_id=update.message.chat.id,
-                    user_id=new_member.id,
-                )
-
-                mongodb_collection.insert_one({
-                    "chat_id": update.message.chat.id,
-                    "chat_name": update.message.chat.title,
-                    "user_id": new_member.id,
-                    "user_name": new_member.name,
-                    "premium": new_member.is_premium,
-                    "welcome_message_id": update.message.id,
-                    "joined_time": update.message.date,
-                })
-    elif update.message.left_chat_member:
-        mongodb_collection.update_one({
-            "chat_id": update.message.chat.id,
-            "user_id": update.message.left_chat_member.id,
-        }, {"$set": {
-            "left": True,
-            "left_time": update.message.date,
-        }})
-
-        await update.message.delete()
-    else:
-        record = mongodb_collection.find_one({
-            "chat_id": update.message.chat.id,
-            "user_id": update.message.from_user.id,
-            "spam_check_passed": {"$exists": False},
-        })
-        if record:
-            spam_check_passed = None
-
-            if spam_check_passed is None and update.message.entities:
-                for entity in update.message.entities:
-                    if entity.URL:
-                        spam_check_passed = False
-                        break
-                    elif entity.MENTION:
-                        spam_check_passed = False
-                        break
-
-            if spam_check_passed is None and update.message.text:
-                spam_check_passed = not ('://' in update.message.text)
-
-            if spam_check_passed is False:
-                await update.message.delete()
-
-                await context.bot.delete_message(
-                    chat_id=update.message.chat.id,
-                    message_id=record["welcome_message_id"],
-                )
-
-                await update.message.chat.ban_member(
-                    user_id=update.message.from_user.id,
-                    revoke_messages=True,
-                )
-
-            if spam_check_passed is not None:
-                mongodb_collection.update_one({
-                    "_id": record["_id"],
-                }, {'$set': {
-                    "first_message_id": update.message.id,
-                    "first_message": update.message.text,
-                    "first_message_time": update.message.date,
-                    "spam_check_passed": spam_check_passed,
-                    "spam_check_time": update.message.date,
+                    "quited_time": {"$exists": False},
+                }, {"$set": {
+                    "quited_time": update.message.date,
                 }})
+            else:
+                record = mongodb_collection.find_one({
+                    "chat_id": update.message.chat.id,
+                    "user_id": update.message.left_chat_member.id,
+                })
+                if record:
+                    mongodb_collection.update_one(record["_id"], {"$set": {
+                        "left": True,
+                        "left_time": update.message.date,
+                    }})
+
+                    await update.message.delete()
+        else:
+            record = mongodb_collection.find_one({
+                "chat_id": update.message.chat.id,
+                "user_id": update.message.from_user.id,
+                "spam_check_passed": {"$exists": False},
+            })
+            if record:
+                spam_check_passed = None
+
+                if spam_check_passed is None and update.message.entities:
+                    for entity in update.message.entities:
+                        if entity.URL:
+                            spam_check_passed = False
+                            break
+                        elif entity.MENTION:
+                            spam_check_passed = False
+                            break
+
+                if spam_check_passed is None and update.message.text:
+                    spam_check_passed = not ('://' in update.message.text)
+
+                if spam_check_passed is False:
+                    await update.message.delete()
+
+                    await context.bot.delete_message(
+                        chat_id=update.message.chat.id,
+                        message_id=record["welcome_message_id"],
+                    )
+
+                    await update.message.chat.ban_member(
+                        user_id=update.message.from_user.id,
+                        revoke_messages=True,
+                    )
+
+                if spam_check_passed is not None:
+                    mongodb_collection.update_one({
+                        "_id": record["_id"],
+                    }, {'$set': {
+                        "first_message_id": update.message.id,
+                        "first_message": update.message.text,
+                        "first_message_time": update.message.date,
+                        "spam_check_passed": spam_check_passed,
+                        "spam_check_time": update.message.date,
+                    }})
 
 if __name__ == "__main__":
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
