@@ -155,52 +155,69 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         "spam_check_passed": True,
                     })
                 else:
-                    await context.bot.restrict_chat_member(
-                        chat_id=update.message.chat.id,
-                        user_id=new_member.id,
-                        permissions=ChatPermissions(
-                            can_send_messages=False,
-                            can_send_media_messages=False,
-                            can_send_polls=False,
-                            can_send_other_messages=False,
-                            can_add_web_page_previews=False,
-                            can_change_info=False,
-                            can_invite_users=False,
-                            can_pin_messages=False,
-                        ),
-                    )
-
-                    random.shuffle(captcha_symbols)
-                    i = random.randint(1, len(captcha_symbols)) - 1
-                    keyboard_row = []
-                    for k in range(len(captcha_symbols)):
-                        d = '0'
-                        if k == i:
-                            d = '1'
-                        keyboard_row.append(InlineKeyboardButton(captcha_symbols[k], callback_data=d))
-                    reply_markup = InlineKeyboardMarkup([keyboard_row])
-                    result = await update.message.reply_text(
-                        "Hello " + new_member.name + "\nPlease select " + captcha_symbols[i] + " in 60 seconds",
-                        reply_markup=reply_markup)
-
-                    context.job_queue.run_once(
-                        captcha_timeout,
-                        60,
-                        data=result.id,
-                        name=str(update.message.chat.id) + '_' + str(new_member.id),
-                        chat_id=update.message.chat.id,
-                        user_id=new_member.id,
-                    )
-
-                    mongodb_collection.insert_one({
-                        "chat_id": update.message.chat.id,
-                        "chat_name": update.message.chat.title,
+                    if mongodb_collection.find_one({
                         "user_id": new_member.id,
-                        "user_name": new_member.name,
-                        "premium": new_member.is_premium,
-                        "welcome_message_id": update.message.id,
-                        "joined_time": update.message.date,
-                    })
+                        "$or": [
+                            {
+                                "bot_check_passed": False,
+                            },
+                            {
+                                "spam_check_passed": False,
+                            },
+                        ],
+                    }):
+                        await update.message.chat.ban_member(
+                            user_id=update.message.from_user.id,
+                            revoke_messages=True,
+                        )
+                        await update.message.delete()
+                    else:
+                        await context.bot.restrict_chat_member(
+                            chat_id=update.message.chat.id,
+                            user_id=new_member.id,
+                            permissions=ChatPermissions(
+                                can_send_messages=False,
+                                can_send_media_messages=False,
+                                can_send_polls=False,
+                                can_send_other_messages=False,
+                                can_add_web_page_previews=False,
+                                can_change_info=False,
+                                can_invite_users=False,
+                                can_pin_messages=False,
+                            ),
+                        )
+
+                        random.shuffle(captcha_symbols)
+                        i = random.randint(1, len(captcha_symbols)) - 1
+                        keyboard_row = []
+                        for k in range(len(captcha_symbols)):
+                            d = '0'
+                            if k == i:
+                                d = '1'
+                            keyboard_row.append(InlineKeyboardButton(captcha_symbols[k], callback_data=d))
+                        reply_markup = InlineKeyboardMarkup([keyboard_row])
+                        result = await update.message.reply_text(
+                            "Hello " + new_member.name + "\nPlease select " + captcha_symbols[i] + " in 60 seconds",
+                            reply_markup=reply_markup)
+
+                        context.job_queue.run_once(
+                            captcha_timeout,
+                            60,
+                            data=result.id,
+                            name=str(update.message.chat.id) + '_' + str(new_member.id),
+                            chat_id=update.message.chat.id,
+                            user_id=new_member.id,
+                        )
+
+                        mongodb_collection.insert_one({
+                            "chat_id": update.message.chat.id,
+                            "chat_name": update.message.chat.title,
+                            "user_id": new_member.id,
+                            "user_name": new_member.name,
+                            "premium": new_member.is_premium,
+                            "welcome_message_id": update.message.id,
+                            "joined_time": update.message.date,
+                        })
         elif update.message.left_chat_member:
             if update.message.left_chat_member.id == context.bot.id:
                 mongodb_database["group"].update_one({
