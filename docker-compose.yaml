@@ -1,6 +1,6 @@
 version: '3.8'
 services:
-  telegram-captcha-bot:
+  telegram-bot-terminator:
     container_name: telegram-bot-terminator
     image: the-matrix/python
     build:
@@ -10,6 +10,10 @@ services:
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
       TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL}
       TELEGRAM_BOT_LISTEN_PORT: ${TELEGRAM_BOT_LISTEN_PORT}
+      MONGODB_HOST: ${MONGODB_HOST}
+      MONGODB_PORT: ${MONGODB_PORT}
+      MONGODB_USER: ${MONGODB_USER}
+      MONGODB_PASS: ${MONGODB_PASS}
     ports:
       - "8080:80/tcp"
     volumes:
@@ -19,24 +23,18 @@ services:
     working_dir: /script
     command: [ "python3", "-u", "main.py" ]
     restart: unless-stopped
-  telegram-captcha-bot-database:
-    image: mysql
-    container_name: telegram-captcha-bot-database
-    restart: unless-stopped
-    security_opt:
-      - seccomp:unconfined
-      - apparmor:unconfined
-    command: mysqld --default-authentication-plugin=mysql_native_password --transaction-isolation=READ-COMMITTED --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --max-connections=512 --innodb-buffer-pool-size=1G --innodb-rollback-on-timeout=OFF --innodb-lock-wait-timeout=50
+  mongodb:
+    image: mongo
+    container_name: telegram-bot-terminator-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: 1qaz2wsx3edc
     volumes:
       - type: volume
-        source: database
-        target: /var/lib/mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: 1qaz2wsx3edc
-      MYSQL_DATABASE: telegram-captcha-bot
-      MYSQL_USER: telegram-captcha-bot
-      MYSQL_PASSWORD: 1qaz2wsx
+        source: mongodb
+        target: /data/db
     ports:
-      - "3306:3306/tcp"
+      - "27017:27017/tcp"
+    restart: unless-stopped
 volumes:
-  database:
+  mongodb:

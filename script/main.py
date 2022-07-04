@@ -3,23 +3,12 @@ import logging
 import os
 import random
 
-from sqlalchemy import BOOLEAN, BIGINT, TEXT, DATETIME
-from sqlalchemy import Column
+import pymongo
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, \
-    ChatPermissions
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-
-logger = logging.getLogger(__name__)
-
-Base = declarative_base()
-engine = create_engine('mysql+pymysql://telegram-bot-terminator:1qaz2wsx@telegram-bot-terminator-database:3306/telegram-bot-terminator', echo=False)
+TELEGRAM_TOKEN = os.environ['TELEGRAM_TOKEN']
 captcha_symbols = [
     "♠",
     "♣",
@@ -27,37 +16,25 @@ captcha_symbols = [
     "♦",
 ]
 
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-class Records(Base):
-    __tablename__ = "records"
-    id = Column(BIGINT, primary_key=True, autoincrement=True)
 
-    chat_id = Column(BIGINT, nullable=False)
-    chat_name = Column(TEXT, nullable=False)
+engine = create_engine(
+    'mysql+pymysql://telegram-bot-terminator:1qaz2wsx@telegram-bot-terminator-database:3306/telegram-bot-terminator',
+    echo=False,
+)
 
-    user_id = Column(BIGINT, nullable=False)
-    user_name = Column(TEXT, nullable=False)
-    premium = Column(BOOLEAN)
-
-    cause_id = Column(BIGINT)
-    cause_name = Column(TEXT)
-
-    welcome_message_id = Column(BIGINT)
-
-    joined_time = Column(DATETIME, nullable=False)
-
-    bot_check_passed = Column(BOOLEAN)
-    bot_check_time = Column(DATETIME)
-
-    first_message_id = Column(BIGINT)
-    first_message = Column(TEXT)
-    first_message_time = Column(DATETIME)
-
-    spam_check_passed = Column(BOOLEAN)
-    spam_check_time = Column(DATETIME)
-
-    left = Column(BOOLEAN)
-    left_time = Column(DATETIME)
+mongodb_client = pymongo.MongoClient(
+    host=os.environ['MONGODB_HOST'],
+    port=int(os.environ['MONGODB_PORT']),
+    username=os.environ['MONGODB_USER'],
+    password=os.environ['MONGODB_PASS'],
+)
+mongodb_database = mongodb_client['terminator']
+mongodb_collection = mongodb_database['record']
 
 
 async def captcha_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -66,8 +43,6 @@ async def captcha_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if query.from_user.id != query.message.reply_to_message.from_user.id:
         await query.answer('Not for you 🤡', show_alert=True)
     else:
-        logger.info(update)
-
         await query.delete_message()
 
         current_jobs = context.job_queue.get_jobs_by_name(str(update.callback_query.message.chat_id) + '_' + str(update.callback_query.from_user.id))
@@ -99,28 +74,24 @@ async def captcha_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 revoke_messages=True,
             )
 
-        Session = sessionmaker(bind=engine)
-        session = Session()
-        result = session.query(
-            Records
-        ).filter(
-            Records.chat_id == update.callback_query.message.chat_id
-        ).filter(
-            Records.user_id == update.callback_query.from_user.id
-        ).filter(
-            Records.bot_check_passed == None
-        ).order_by(Records.id.desc()).first()
-        if result:
+        record = mongodb_collection.find_one({
+            "chat_id": update.callback_query.message.chat_id,
+            "user_id": update.callback_query.from_user.id,
+            "bot_check_passed": {"$exists": False},
+        })
+        if record:
             if not bot_check_passed:
                 await context.bot.delete_message(
                     chat_id=update.callback_query.message.chat_id,
-                    message_id=result.welcome_message_id,
+                    message_id=record["welcome_message_id"],
                 )
 
-            result.bot_check_passed = bot_check_passed
-            result.bot_check_time = update.callback_query.message.date
-            session.commit()
-            session.close()
+            mongodb_collection.update_one({
+                "_id": record["_id"],
+            }, {"$set": {
+                "bot_check_passed": bot_check_passed,
+                "bot_check_time": update.callback_query.message.date,
+            }})
 
 
 async def captcha_timeout(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -131,31 +102,29 @@ async def captcha_timeout(context: ContextTypes.DEFAULT_TYPE) -> None:
         message_id=job.data,
     )
 
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    result = session.query(Records).filter(
-        Records.chat_id == job.chat_id
-    ).filter(
-        Records.user_id == job.user_id
-    ).filter(
-        Records.bot_check_passed == None
-    ).order_by(Records.id.desc()).first()
-    if result:
-        await context.bot.delete_message(
-            chat_id=job.chat_id,
-            message_id=result.welcome_message_id,
-        )
-
-        result.bot_check_passed = False
-        result.bot_check_time = datetime.datetime.now()
-        session.commit()
-        session.close()
-
     await context.bot.ban_chat_member(
         chat_id=job.chat_id,
         user_id=job.user_id,
         revoke_messages=True,
     )
+
+    record = mongodb_collection.find_one({
+        "chat_id": job.chat_id,
+        "user_id": job.user_id,
+        "bot_check_passed": {"$exists": False},
+    })
+    if record:
+        await context.bot.delete_message(
+            chat_id=job.chat_id,
+            message_id=record["welcome_message_id"],
+        )
+
+        mongodb_collection.update_one({
+            "_id": record["_id"],
+        }, {"$set": {
+            "bot_check_passed": False,
+            "bot_check_time": datetime.datetime.now(),
+        }})
 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -165,23 +134,21 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if update.message.new_chat_members:
-        Session = sessionmaker(bind=engine)
-        session = Session()
         for new_member in update.message.new_chat_members:
             if (new_member.id != update.message.from_user.id) or new_member.is_premium:
-                session.add(Records(
-                    chat_id=update.message.chat.id,
-                    chat_name=update.message.chat.title,
-                    user_id=new_member.id,
-                    user_name=new_member.name,
-                    premium=new_member.is_premium,
-                    cause_id=update.message.from_user.id,
-                    cause_name=update.message.from_user.name,
-                    welcome_message_id=update.message.id,
-                    joined_time=update.message.date,
-                    bot_check_passed=True,
-                    spam_check_passed=True,
-                ))
+                mongodb_collection.insert_one({
+                    "chat_id": update.message.chat.id,
+                    "chat_name": update.message.chat.title,
+                    "user_id": new_member.id,
+                    "user_name": new_member.name,
+                    "premium": new_member.is_premium,
+                    "cause_id": update.message.from_user.id,
+                    "cause_name": update.message.from_user.name,
+                    "welcome_message_id": update.message.id,
+                    "joined_time": update.message.date,
+                    "bot_check_passed": True,
+                    "spam_check_passed": True,
+                })
             else:
                 await context.bot.restrict_chat_member(
                     chat_id=update.message.chat.id,
@@ -207,7 +174,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         d = '1'
                     keyboard_row.append(InlineKeyboardButton(captcha_symbols[k], callback_data=d))
                 reply_markup = InlineKeyboardMarkup([keyboard_row])
-                result = await update.message.reply_text("Hello " + new_member.name + "\nPlease select " + captcha_symbols[i] + " in 60 seconds", reply_markup=reply_markup)
+                result = await update.message.reply_text(
+                    "Hello " + new_member.name + "\nPlease select " + captcha_symbols[i] + " in 60 seconds",
+                    reply_markup=reply_markup)
 
                 context.job_queue.run_once(
                     captcha_timeout,
@@ -218,79 +187,71 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     user_id=new_member.id,
                 )
 
-                session.add(Records(
-                    chat_id=update.message.chat.id,
-                    chat_name=update.message.chat.title,
-                    user_id=new_member.id,
-                    user_name=new_member.name,
-                    premium=new_member.is_premium,
-                    welcome_message_id=update.message.id,
-                    joined_time=update.message.date,
-                ))
-
-        session.commit()
-        session.close()
+                mongodb_collection.insert_one({
+                    "chat_id": update.message.chat.id,
+                    "chat_name": update.message.chat.title,
+                    "user_id": new_member.id,
+                    "user_name": new_member.name,
+                    "premium": new_member.is_premium,
+                    "welcome_message_id": update.message.id,
+                    "joined_time": update.message.date,
+                })
     elif update.message.left_chat_member:
-        Session = sessionmaker(bind=engine)
-        session = Session()
-        result = session.query(Records).filter(Records.chat_id == update.message.chat.id).filter(Records.user_id == update.message.left_chat_member.id).order_by(Records.id.desc()).first()
-        if result:
-            result.left = True
-            result.left_time = update.message.date
-            session.commit()
-        session.close()
+        mongodb_collection.update_one({
+            "chat_id": update.message.chat.id,
+            "user_id": update.message.left_chat_member.id,
+        }, {"$set": {
+            "left": True,
+            "left_time": update.message.date,
+        }})
 
         await update.message.delete()
     else:
-        Session = sessionmaker(bind=engine)
-        session = Session()
-        result = session.query(Records).filter(
-            Records.chat_id == update.message.chat.id
-        ).filter(
-            Records.user_id == update.message.from_user.id
-        ).filter(
-            Records.spam_check_passed == None
-        ).order_by(Records.id.desc()).first()
-        if result:
+        record = mongodb_collection.find_one({
+            "chat_id": update.message.chat.id,
+            "user_id": update.message.from_user.id,
+            "spam_check_passed": {"$exists": False},
+        })
+        if record:
             spam_check_passed = None
 
             if spam_check_passed is None and update.message.entities:
                 for entity in update.message.entities:
-                    if entity.url:
+                    if entity.URL:
+                        spam_check_passed = False
+                        break
+                    elif entity.MENTION:
                         spam_check_passed = False
                         break
 
             if spam_check_passed is None and update.message.text:
                 spam_check_passed = not ('://' in update.message.text)
 
-                if not spam_check_passed:
-                    await update.message.delete()
+            if spam_check_passed is False:
+                await update.message.delete()
 
-                    await context.bot.delete_message(
-                        chat_id=update.message.chat.id,
-                        message_id=result.welcome_message_id,
-                    )
+                await context.bot.delete_message(
+                    chat_id=update.message.chat.id,
+                    message_id=record["welcome_message_id"],
+                )
 
-                    await update.message.chat.ban_member(
-                        user_id=update.message.from_user.id,
-                        revoke_messages=True,
-                    )
+                await update.message.chat.ban_member(
+                    user_id=update.message.from_user.id,
+                    revoke_messages=True,
+                )
 
             if spam_check_passed is not None:
-                result.first_message_id = update.message.id
-                result.first_message = update.message.text
-                result.first_message_time = update.message.date
-                result.spam_check_passed = spam_check_passed
-                result.spam_check_time = update.message.date
-                session.commit()
-        session.close()
-
+                mongodb_collection.update_one({
+                    "_id": record["_id"],
+                }, {'$set': {
+                    "first_message_id": update.message.id,
+                    "first_message": update.message.text,
+                    "first_message_time": update.message.date,
+                    "spam_check_passed": spam_check_passed,
+                    "spam_check_time": update.message.date,
+                }})
 
 if __name__ == "__main__":
-    Base.metadata.create_all(engine)
-
-    TELEGRAM_TOKEN = os.environ['TELEGRAM_TOKEN']
-
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CallbackQueryHandler(captcha_handler))
     application.add_handler(MessageHandler(filters.ALL, message_handler))
